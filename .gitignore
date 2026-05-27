@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.vscode
+.claude
+
+# Virtual environments
+.venv
+
+.env
+.local-*
+chroma_db/
+data/raw

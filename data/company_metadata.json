@@ -1,0 +1,32 @@
+{
+  "roche": {
+    "name": "Roche Holding AG",
+    "ticker": "ROG",
+    "sector": "Pharmaceuticals",
+    "exchange": "SIX"
+  },
+  "novartis": {
+    "name": "Novartis AG",
+    "ticker": "NOVN",
+    "sector": "Pharmaceuticals",
+    "exchange": "SIX"
+  },
+  "ubs": {
+    "name": "UBS Group AG",
+    "ticker": "UBSG",
+    "sector": "Banking",
+    "exchange": "SIX"
+  },
+  "nestle": {
+    "name": "Nestle S.A.",
+    "ticker": "NESN",
+    "sector": "Consumer Staples",
+    "exchange": "SIX"
+  },
+  "zurich": {
+    "name": "Zurich Insurance Group AG",
+    "ticker": "ZURN",
+    "sector": "Insurance",
+    "exchange": "SIX"
+  }
+}

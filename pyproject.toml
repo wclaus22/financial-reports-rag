@@ -1,0 +1,30 @@
+[project]
+name = "financial-reports-rag"
+version = "0.1.0"
+description = "RAG over Swiss-listed company annual reports (Roche, Novartis, UBS, Nestle, Zurich Insurance)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.104.1",
+    "chromadb>=1.5.9",
+    "cryptography>=48.0.0",
+    "fastapi>=0.136.3",
+    "langchain-text-splitters>=1.1.2",
+    "pydantic>=2.13.4",
+    "pypdf>=6.12.2",
+    "uvicorn>=0.48.0",
+    "voyageai>=0.3.7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.14",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ingest"]
