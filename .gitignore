@@ -15,3 +15,4 @@ wheels/
 .local-*
 chroma_db/
 data/raw
+.pytest_cache/

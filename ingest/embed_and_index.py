@@ -14,10 +14,45 @@ import voyageai
 from app.config import settings
 from ingest.chunk import chunk_pages
 from ingest.embed import embed_batch
+from ingest.models import Chunk
 from ingest.parse import parse_pdf
 
 EMBEDDING_BATCH_SIZE = 64
 RATE_LIMIT_SLEEP_SEC = 0.1
+
+
+def index_chunks(
+    chunks: list[Chunk],
+    voyage_client: voyageai.Client,
+    collection: "chromadb.Collection",
+    batch_size: int = EMBEDDING_BATCH_SIZE,
+) -> None:
+    """Embed `chunks` in batches and add them to the chroma collection."""
+    for i in tqdm.tqdm(
+        range(0, len(chunks), batch_size),
+        desc="Embedding and indexing chunks",
+        total=(len(chunks) + batch_size - 1) // batch_size,
+    ):
+        batch = chunks[i : i + batch_size]
+        texts = [chunk.text for chunk in batch]
+        embeddings = embed_batch(voyage_client, texts)
+        collection.add(
+            ids=[chunk.chunk_id for chunk in batch],
+            metadatas=[
+                {
+                    "ticker": chunk.ticker,
+                    "company_name": chunk.company_name,
+                    "sector": chunk.sector,
+                    "exchange": chunk.exchange,
+                    "year": chunk.year,
+                    "page_number": chunk.page_number,
+                }
+                for chunk in batch
+            ],
+            embeddings=embeddings,
+            documents=texts,
+        )
+        time.sleep(RATE_LIMIT_SLEEP_SEC)
 
 
 def main() -> None:
@@ -49,30 +84,7 @@ def main() -> None:
         name=settings.collection_name, metadata={"hnsw:space": "cosine"}
     )
 
-    for i in tqdm.tqdm(
-        range(0, len(chunks), EMBEDDING_BATCH_SIZE),
-        desc="Embedding and indexing chunks",
-        total=(len(chunks) + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE,
-    ):
-        batch = chunks[i : i + EMBEDDING_BATCH_SIZE]
-        texts = [chunk.text for chunk in batch]
-        embeddings = embed_batch(voyage, texts)
-        collection.add(
-            ids=[chunk.chunk_id for chunk in batch],
-            metadatas=[
-                {
-                    "ticker": chunk.ticker,
-                    "company_name": chunk.company_name,
-                    "sector": chunk.sector,
-                    "exchange": chunk.exchange,
-                    "year": chunk.year,
-                    "page_number": chunk.page_number,
-                }
-                for chunk in batch
-            ],
-            embeddings=embeddings,
-        )
-        time.sleep(RATE_LIMIT_SLEEP_SEC)
+    index_chunks(chunks, voyage, collection)
 
     print(f"Ingestion complete! Collection size: {collection.count()} chunks.")
 

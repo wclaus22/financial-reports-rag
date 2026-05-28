@@ -27,7 +27,7 @@ def parse_pdf(metadata_path: str) -> list[PageData]:
     metadata = parse_metadata(metadata_path)
 
     pages: list[PageData] = []
-    pdf_paths = list(Path("data/raw").glob("*.pdf"))
+    pdf_paths = sorted(Path("data/raw").glob("*/*.pdf"))
 
     if not pdf_paths:
         raise FileNotFoundError("No PDF files found in data/raw/")

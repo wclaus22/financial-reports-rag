@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Swiss Financial Reports RAG</title>
+    <style>
+        :root {
+            --bg: #f7f7f8;
+            --panel: #ffffff;
+            --border: #e3e3e8;
+            --text: #1f2328;
+            --muted: #6b7280;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --code-bg: #f3f4f6;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 820px;
+            margin: 0 auto;
+            padding: 2rem 1.25rem 4rem;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin: 0 0 0.25rem;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            margin: 0 0 1.5rem;
+            font-size: 0.95rem;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 90px;
+            padding: 0.75rem;
+            font: inherit;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            resize: vertical;
+            background: #fff;
+        }
+
+        textarea:focus {
+            outline: 2px solid var(--accent);
+            outline-offset: -1px;
+            border-color: transparent;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-top: 0.75rem;
+        }
+
+        button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 0.55rem 1.1rem;
+            font: inherit;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .top-k {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .top-k input {
+            width: 56px;
+            padding: 0.35rem 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font: inherit;
+        }
+
+        .hint {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-left: auto;
+        }
+
+        .answer {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .error {
+            color: #b91c1c;
+            background: #fef2f2;
+            border-color: #fecaca;
+        }
+
+        details.source {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            background: #fff;
+        }
+
+        details.source summary {
+            cursor: pointer;
+            padding: 0.6rem 0.8rem;
+            list-style: none;
+            font-size: 0.9rem;
+            display: flex;
+            gap: 0.6rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        details.source summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 0.1rem 0.45rem;
+            border-radius: 4px;
+            background: var(--code-bg);
+            color: var(--muted);
+            font-size: 0.8rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        .tag.ticker {
+            background: #eef2ff;
+            color: #3730a3;
+        }
+
+        .source-text {
+            padding: 0 0.8rem 0.8rem;
+            font-size: 0.88rem;
+            color: #374151;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .section-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin: 0 0 0.5rem;
+        }
+
+        .loading {
+            color: var(--muted);
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Swiss Financial Reports RAG</h1>
+        <p class="subtitle">Ask questions about ingested annual reports.</p>
+
+        <div class="panel">
+            <textarea id="question" placeholder="e.g. What was Nestlé's organic growth in 2023?" autofocus></textarea>
+            <div class="controls">
+                <button id="ask">Ask</button>
+                <label class="top-k">
+                    top_k
+                    <input id="topk" type="number" min="1" max="20" value="5" />
+                </label>
+                <span class="hint">⌘/Ctrl + Enter to submit</span>
+            </div>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        const $question = document.getElementById("question");
+        const $topk = document.getElementById("topk");
+        const $ask = document.getElementById("ask");
+        const $output = document.getElementById("output");
+
+        function escapeHtml(str) {
+            const div = document.createElement("div");
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function renderLoading() {
+            $output.innerHTML = `<div class="panel loading">Thinking…</div>`;
+        }
+
+        function renderError(msg) {
+            $output.innerHTML = `<div class="panel error">${escapeHtml(msg)}</div>`;
+        }
+
+        function renderResult({ answer, sources }) {
+            const sourcesHtml = (sources || []).map((s, i) => `
+        <details class="source">
+          <summary>
+            <strong>[${i + 1}]</strong>
+            <span class="tag ticker">${escapeHtml(s.ticker)}</span>
+            <span class="tag">${s.year}</span>
+            <span class="tag">p.${s.page_number}</span>
+            <span class="tag">d=${s.distance.toFixed(3)}</span>
+          </summary>
+          <div class="source-text">${escapeHtml(s.text)}</div>
+        </details>
+      `).join("");
+
+            $output.innerHTML = `
+        <div class="panel">
+          <p class="section-title">Answer</p>
+          <div class="answer">${escapeHtml(answer)}</div>
+        </div>
+        ${sources && sources.length ? `
+          <div class="panel">
+            <p class="section-title">Sources (${sources.length})</p>
+            ${sourcesHtml}
+          </div>
+        ` : ""}
+      `;
+        }
+
+        async function ask() {
+            const question = $question.value.trim();
+            if (!question) return;
+            const top_k = Math.max(1, Math.min(20, parseInt($topk.value, 10) || 5));
+
+            $ask.disabled = true;
+            renderLoading();
+
+            try {
+                const res = await fetch("/query", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question, top_k }),
+                });
+                if (!res.ok) {
+                    const body = await res.text();
+                    throw new Error(`HTTP ${res.status}: ${body}`);
+                }
+                const data = await res.json();
+                renderResult(data);
+            } catch (err) {
+                renderError(err.message || String(err));
+            } finally {
+                $ask.disabled = false;
+            }
+        }
+
+        $ask.addEventListener("click", ask);
+        $question.addEventListener("keydown", (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                ask();
+            }
+        });
+    </script>
+</body>
+
+</html>

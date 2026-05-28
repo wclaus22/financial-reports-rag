@@ -1,0 +1,13 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      CHROMA_PERSIST_DIRECTORY: /app/chroma_db
+    volumes:
+      - ./chroma_db:/app/chroma_db
+      - ./frontend:/app/frontend
+    restart: unless-stopped
