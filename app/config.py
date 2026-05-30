@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Retrieval
     top_k: int = 5
 
+    # Reranking
+    rerank_model: str = "rerank-2.5"
+    rerank_candidates: int = 50  # vector-fetched pool size before rerank
+
     # Data path
     metadata_path: str = "./data/company_metadata.json"
 

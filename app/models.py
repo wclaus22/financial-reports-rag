@@ -18,6 +18,7 @@ class RetrievedHit:
     text: str
     distance: float
     chunk_id: str
+    rerank_score: float | None = None
 
 
 class QueryRequest(BaseModel):

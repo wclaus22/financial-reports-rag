@@ -10,8 +10,8 @@ dependencies = [
     "cryptography>=48.0.0",
     "fastapi>=0.136.3",
     "langchain-text-splitters>=1.1.2",
+    "pdfplumber>=0.11.0",
     "pydantic>=2.13.4",
-    "pypdf>=6.12.2",
     "uvicorn>=0.48.0",
     "voyageai>=0.3.7",
 ]

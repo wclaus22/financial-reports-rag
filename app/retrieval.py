@@ -1,5 +1,9 @@
 """
 retrieval module for retrieving relevant documents based on user queries.
+
+Two-stage retrieval: first fetch a candidate pool (settings.rerank_candidates,
+default 50) by vector similarity in Chroma, then rerank with Voyage's
+cross-encoder (settings.rerank_model) and return the top-K reordered hits.
 """
 
 import chromadb
@@ -29,14 +33,21 @@ class Retriever:
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedHit]:
         """
-        Retrieve relevant documents based on user query.
+        Retrieve relevant documents for a user query.
+
+        Stage 1: vector search in Chroma fetches `settings.rerank_candidates`
+                 candidates by cosine similarity.
+        Stage 2: Voyage rerank scores each candidate against the query with a
+                 cross-encoder and returns the top `top_k` by relevance.
 
         Args:
-            query (str): User query.
-            top_k (int | None): Number of top results to return. Defaults to settings.top_k.
+            query: User query.
+            top_k: Number of top results to return after reranking.
+                   Defaults to settings.top_k.
 
         Returns:
-            list[dict]: List of relevant documents with metadata and distance.
+            list[RetrievedHit] ordered by rerank relevance (best first), each
+            carrying both the original vector distance and the rerank score.
         """
         top_k = top_k or settings.top_k
 
@@ -46,16 +57,28 @@ class Retriever:
 
         results = self.collection.query(
             query_embeddings=[query_emb],
-            n_results=top_k,
+            n_results=settings.rerank_candidates,
         )
 
-        hits: list[dict] = []
-        for chunk_id, doc, meta, dist in zip(
-            results["ids"][0],
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0],
-        ):
+        docs = results["documents"][0]
+        if not docs:
+            return []
+
+        rerank = self.voyage.rerank(
+            query=query,
+            documents=docs,
+            model=settings.rerank_model,
+            top_k=top_k,
+        )
+
+        metadatas = results["metadatas"][0]
+        distances = results["distances"][0]
+        ids = results["ids"][0]
+
+        hits: list[RetrievedHit] = []
+        for r in rerank.results:
+            i = r.index
+            meta = metadatas[i]
             hits.append(
                 RetrievedHit(
                     ticker=meta["ticker"],
@@ -64,9 +87,10 @@ class Retriever:
                     exchange=meta["exchange"],
                     year=meta["year"],
                     page_number=meta["page_number"],
-                    text=doc,
-                    distance=dist,
-                    chunk_id=chunk_id,
+                    text=docs[i],
+                    distance=distances[i],
+                    chunk_id=ids[i],
+                    rerank_score=r.relevance_score,
                 )
             )
         return hits
