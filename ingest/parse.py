@@ -211,8 +211,13 @@ def parse_pdf(metadata_path: str) -> list[PageData]:
                 desc=f"Processing {pdf_path.name}",
             ):
                 try:
-                    linear_text = (page.extract_text() or "").strip()
-                    detected_tables = page.extract_tables() or []
+                    # dedupe_chars collapses overlapping glyphs that some PDFs
+                    # (e.g. UBS 2021) use to render bold text — without this
+                    # the current-year column of summary tables comes out as
+                    # "3355,,554422" instead of "35,542".
+                    deduped = page.dedupe_chars(tolerance=1)
+                    linear_text = (deduped.extract_text() or "").strip()
+                    detected_tables = deduped.extract_tables() or []
                 except Exception as e:
                     print(
                         f"  WARN: failed page {i + 1} of {pdf_path.name}: {e}"

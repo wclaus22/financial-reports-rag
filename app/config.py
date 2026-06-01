@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Reranking
     rerank_model: str = "rerank-2.5"
     rerank_candidates: int = 50  # vector-fetched pool size before rerank
+    # For multi-year/range queries we fan out one Chroma query per year. The
+    # key-figures / summary-table pages typically sit at vector ranks 20–60
+    # within a year-filtered search, so the per-year pool needs to be wide.
+    rerank_candidates_per_year: int = 75
 
     # Data path
     metadata_path: str = "./data/company_metadata.json"

@@ -4,7 +4,7 @@ from collections import namedtuple
 from unittest.mock import MagicMock
 
 from app.config import settings
-from app.retrieval import Retriever
+from app.retrieval import Retriever, _extract_query_years
 
 
 FakeResult = namedtuple("FakeResult", ["index", "document", "relevance_score"])
@@ -206,3 +206,134 @@ def test_retrieve_empty_candidates_skips_rerank():
     retriever.retrieve("anything")
 
     voyage.rerank.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# year-aware multi-query fan-out
+# ---------------------------------------------------------------------------
+
+
+def test_extract_query_years_between_and():
+    assert _extract_query_years("UBS revenues between 2021 and 2025") == [
+        2021, 2022, 2023, 2024, 2025,
+    ]
+
+
+def test_extract_query_years_from_to():
+    assert _extract_query_years("Roche sales from 2020 to 2024") == [
+        2020, 2021, 2022, 2023, 2024,
+    ]
+
+
+def test_extract_query_years_hyphen_range():
+    assert _extract_query_years("UBS revenues 2021-2025") == [
+        2021, 2022, 2023, 2024, 2025,
+    ]
+
+
+def test_extract_query_years_explicit_list():
+    assert _extract_query_years("UBS revenues in 2021 and 2023") == [2021, 2023]
+
+
+def test_extract_query_years_single_year_returns_empty():
+    assert _extract_query_years("What were UBS revenues in 2023?") == []
+
+
+def test_extract_query_years_no_years_returns_empty():
+    assert _extract_query_years("What is UBS's strategy?") == []
+
+
+def test_extract_query_years_caps_absurd_range():
+    """A 50-year span shouldn't fan out into 50 Chroma queries."""
+    assert _extract_query_years("Roche revenues from 1975 to 2025") == []
+
+
+def test_retrieve_multi_year_query_runs_one_chroma_call_per_year(monkeypatch):
+    """Query mentions a year range → one filtered Chroma call per year."""
+    # one chunk per year, all distinct ids so dedupe doesn't drop them
+    def per_year(_, year: int) -> dict:
+        return {
+            "ids": [[f"chunk-{year}"]],
+            "documents": [[f"text for {year}"]],
+            "metadatas": [
+                [
+                    {
+                        "ticker": "UBSG",
+                        "year": year,
+                        "page_number": 10,
+                        "sector": "Financials",
+                        "exchange": "SIX",
+                        "company_name": "UBS Group AG",
+                    }
+                ]
+            ],
+            "distances": [[0.3]],
+        }
+
+    voyage = MagicMock()
+    voyage.embed.return_value.embeddings = [[0.1, 0.2, 0.3]]
+    collection = MagicMock()
+    collection.query.side_effect = lambda **kw: per_year(None, kw["where"]["year"])
+
+    # rerank returns all candidates in original order with descending scores
+    def fake_rerank(query, documents, model, top_k):
+        return _make_fake_rerank(documents)
+    voyage.rerank.side_effect = fake_rerank
+
+    retriever = Retriever(voyage_client=voyage, collection=collection)
+    hits = retriever.retrieve("UBS revenues between 2021 and 2025", top_k=10)
+
+    # one Chroma query per year, all five with a where-filter
+    assert collection.query.call_count == 5
+    year_filters = [
+        call.kwargs["where"]["year"]
+        for call in collection.query.call_args_list
+    ]
+    assert sorted(year_filters) == [2021, 2022, 2023, 2024, 2025]
+    # merged pool contains one chunk per year
+    assert len(hits) == 5
+    assert sorted(h.year for h in hits) == [2021, 2022, 2023, 2024, 2025]
+
+
+def test_retrieve_single_year_uses_unfiltered_pool():
+    """Single-year queries go through the standard single-pool path."""
+    retriever, _, collection = make_retriever(_two_chunk_result())
+
+    retriever.retrieve("What were UBS revenues in 2023?")
+
+    # exactly one Chroma call, no where-filter
+    assert collection.query.call_count == 1
+    assert "where" not in collection.query.call_args.kwargs
+
+
+def test_retrieve_multi_year_dedupes_by_chunk_id():
+    """If the same chunk_id surfaces under two year filters, it appears once."""
+    # both year-filtered queries return the same chunk_id — should appear once
+    duplicate = {
+        "ids": [["dup-chunk"]],
+        "documents": [["shared text"]],
+        "metadatas": [
+            [
+                {
+                    "ticker": "UBSG",
+                    "year": 2023,
+                    "page_number": 10,
+                    "sector": "Financials",
+                    "exchange": "SIX",
+                    "company_name": "UBS Group AG",
+                }
+            ]
+        ],
+        "distances": [[0.3]],
+    }
+    voyage = MagicMock()
+    voyage.embed.return_value.embeddings = [[0.1, 0.2, 0.3]]
+    voyage.rerank.side_effect = lambda **kw: _make_fake_rerank(kw["documents"])
+    collection = MagicMock()
+    collection.query.return_value = duplicate
+
+    retriever = Retriever(voyage_client=voyage, collection=collection)
+    hits = retriever.retrieve("UBS revenues 2021 and 2022")
+
+    assert len(hits) == 1
+    assert hits[0].chunk_id == "dup-chunk"
