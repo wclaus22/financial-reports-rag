@@ -8,7 +8,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.generation import Generator
 from app.logging import configure_logging
-from app.models import QueryRequest, QueryResponse, RetrievedHit, Source
+from app.models import QueryRequest, QueryResponse, Source
+from app.pipeline import run_query
 from app.retrieval import Retriever
 from app.safety import GenerationSafety, NoSafetyMechanism
 
@@ -67,17 +68,9 @@ def query(request: QueryRequest):
             f"Generator unavailable. Error: {e}",
         )
 
-    hits: list[RetrievedHit] = retriever.retrieve(request.question, request.top_k)
-    if not hits:
-        return QueryResponse(
-            answer="No relevant excerpts found in the corpus.", sources=[]
-        )
-
-    # returning no filtered hits is different from not finding any hits in the corpus
-    answer, filtered_hits = generator.generate_answer(request.question, hits)
-    filtered_sources = [Source(**hit.__dict__) for hit in filtered_hits]
-
-    return QueryResponse(answer=answer, sources=filtered_sources)
+    result = run_query(request.question, request.top_k, retriever, generator)
+    sources = [Source(**hit.__dict__) for hit in result.grounding]
+    return QueryResponse(answer=result.answer, sources=sources)
 
 
 @app.get("/health")

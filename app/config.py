@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     # Models
     embedding_model: str = "voyage-4"
     llm_model: str = "claude-haiku-4-5"
+    # The eval judge should be at least as capable as the system under test
+    judge_model: str = "claude-sonnet-4-6"
 
     # Retrieval
     top_k: int = 5
@@ -24,9 +26,7 @@ class Settings(BaseSettings):
     # Reranking
     rerank_model: str = "rerank-2.5"
     rerank_candidates: int = 50  # vector-fetched pool size before rerank
-    # For multi-year/range queries we fan out one Chroma query per year. The
-    # key-figures / summary-table pages typically sit at vector ranks 20–60
-    # within a year-filtered search, so the per-year pool needs to be wide.
+    # For multi-year/range queries we fan out one Chroma query per year.
     rerank_candidates_per_year: int = 75
 
     # Data path

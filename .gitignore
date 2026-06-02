@@ -16,3 +16,4 @@ wheels/
 chroma_db/
 data/raw
 .pytest_cache/
+evals/results/

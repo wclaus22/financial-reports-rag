@@ -23,9 +23,13 @@ A FastAPI service exposes a `/query` endpoint and a minimal static HTML frontend
 
 ```
 app/             FastAPI app, retrieval, generation, safety, config
+  pipeline.py    Shared retrieve→generate orchestration (route + eval call this)
 ingest/          PDF parsing, chunking, embedding, indexing
 frontend/        Static single-page UI (index.html)
-tests/           Pytest suite (retrieval, generation, ingestion)
+evals/           Evaluation harness (question set, runner, metrics, LLM judge)
+  eval_set.json  Gold question set with expected answers and source pages
+  results/       Timestamped run outputs (gitignored)
+tests/           Pytest suite (retrieval, generation, ingestion, pipeline, judge)
 data/
   raw/           Annual report PDFs, one folder per company (gitignored)
   company_metadata.json
@@ -54,7 +58,8 @@ cp .env.example .env
 | `CHROMA_PERSIST_DIRECTORY` | Local path for the Chroma DB (e.g. `./chroma_db`) |
 | `COLLECTION_NAME` | Chroma collection name |
 | `EMBEDDING_MODEL` | Voyage model (default `voyage-4`) |
-| `LLM_MODEL` | Claude model (default `claude-haiku-4-5`) |
+| `LLM_MODEL` | Claude model for answer generation (default `claude-haiku-4-5`) |
+| `JUDGE_MODEL` | Claude model for the eval judge (default `claude-sonnet-4-6`) |
 | `TOP_K` | Number of chunks to retrieve per query |
 
 ## Data
@@ -110,13 +115,53 @@ Retrieved hits pass through a `GenerationSafety` strategy before being formatted
 
 The default `NoSafetyMechanism` is a pass-through. Real mechanisms (PII redaction, content-policy filters, etc.) plug in by implementing the same protocol.
 
+## Evaluation
+
+The [evals/](evals/) harness scores the system against a gold question set in [evals/eval_set.json](evals/eval_set.json). The runner drives the **same** `run_query` pipeline the `/query` endpoint uses ([app/pipeline.py](app/pipeline.py)) — in-process, no server required — so the eval can never drift from what's served.
+
+```bash
+make eval                  # full run: retrieval scoring + LLM-judged behaviour
+make eval-retrieval        # retrieval only (skips the judge; still generates answers)
+
+# extra flags pass straight through via ARGS:
+make eval ARGS="--limit 3 --category single_doc_factual"
+make eval ARGS="--id A001 --id B002"
+```
+
+A live run needs the Voyage + Anthropic keys and an ingested Chroma index, and spends API calls (one generation + one judge call per answerable question). Results are written to `evals/results/eval_<utc-timestamp>.json` and a per-category summary is printed.
+
+### Two scoring axes
+
+Each question is scored on two independent axes:
+
+- **Retrieval** (deterministic) — did the retrieved chunks cover the question's gold source pages? Only applies to questions that have gold sources.
+- **Behaviour** (LLM judge, [evals/judge.py](evals/judge.py)) — did the system do the right thing: answer correctly, refuse appropriately, and *not fabricate*? The judge is **not** told the expected behaviour, so it grades what actually happened; fabrication is judged only against the retrieved excerpts.
+
+The summary table columns:
+
+| Column | Meaning |
+| --- | --- |
+| `n` | questions in the category |
+| `ret_n` | questions with gold sources (retrieval-applicable; refusal questions are excluded) |
+| `ret_pass` | % where retrieval hit **all** required gold sources (or **any**, per `gold_match`) |
+| `recall` | mean *fraction* of gold sources hit (partial-credit view of `ret_pass`) |
+| `mrr` | mean reciprocal rank of the first gold-page hit (1.0 = top result, 0 = not in top-k) |
+| `behav` | % passing the behaviour judge, over all `n` questions |
+
+### Question schema
+
+Each entry in `eval_set.json` carries an `expected_behavior` and a `gold_match`:
+
+- **`expected_behavior`**: `answer` (must answer correctly), `refuse` (must decline — out-of-corpus, false-premise, injection, etc.), or `answer_or_refuse` (sparse topics where a grounded answer *or* an honest refusal both pass, but fabrication fails).
+- **`gold_match`**: `all` (every gold source must be retrieved — cross-doc/multi-year) or `any` (one is sufficient — e.g. the same fact stated in two reports). Within a single source, hitting any of its listed pages counts.
+
 ## Tests
 
 ```bash
-uv run pytest
+make test          # or: uv run pytest -q
 ```
 
-Covers the retriever, the generator (with the safety pipeline), and the ingestion path.
+Covers the retriever, the generator (with the safety pipeline), the shared query pipeline, the eval judge, and the ingestion path.
 
 ## License
 
