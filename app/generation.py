@@ -16,7 +16,9 @@ You are given a question and a set of retrieved excerpts from the reports. Answe
 
 When citing information, reference the source as [Ticker Year, p. PAGE]. For example: "Roche's R&D spending grew 7% in 2024 [ROG 2024, p. 23]."
 
-Be precise and concise. Quote specific figures where the excerpts provide them. If excerpts conflict, surface the conflict rather than picking one."""
+Be precise and concise. Quote specific figures where the excerpts provide them. If excerpts conflict, surface the conflict rather than picking one.
+
+Grounding discipline: state a figure ONLY if an excerpt for that exact company AND year is present. If a requested company or year is absent from the excerpts, say so explicitly rather than guessing. NEVER infer, interpolate, or carry a figure across a different year or company. Always cite the source as [Ticker Year, p. PAGE]."""
 
 
 class Generator:

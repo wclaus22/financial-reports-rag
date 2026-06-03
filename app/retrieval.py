@@ -22,7 +22,7 @@ from app.models import RetrievedHit
 
 # Spelled-out year ranges. Each branch captures (low_year, high_year).
 _YEAR_RANGE = re.compile(
-    r"(?:between|from)\s+(\d{4})\s+(?:and|to)\s+(\d{4})"
+    r"(?:between|from)\s+(\d{4})\s+(?:and|to|through|upto|until)\s+(\d{4})"
     r"|(\d{4})\s*[-–]\s*(\d{4})"
     r"|(\d{4})\s+to\s+(\d{4})",
     re.IGNORECASE,
@@ -134,10 +134,9 @@ class Retriever:
         """
         top_k = top_k or settings.top_k
 
-        query_emb = self.voyage.embed(
-            [query], model=settings.embedding_model, input_type="query"
-        ).embeddings[0]
+        query_emb = self._embed_query(query)
 
+        # extract years for by-year fanout of retrieval
         years = _extract_query_years(query)
         docs, metadatas, distances, ids = self._fetch_candidates(query_emb, years)
 
@@ -171,6 +170,63 @@ class Retriever:
         else:
             selected = list(rerank.results)
 
+        return self._build_hits(docs, metadatas, distances, ids, selected)
+
+    def search(
+        self,
+        query: str,
+        ticker: str | None = None,
+        year: int | None = None,
+        top_k: int | None = None,
+    ) -> list[RetrievedHit]:
+        """
+        Search for relevant documents for a user query, with optional ticker and year filters.
+        """
+        top_k = top_k or settings.top_k
+
+        query_emb = self._embed_query(query)
+
+        # Build the filter for Chroma query
+        where_filter = {}
+        if ticker and year:
+            where_filter["$and"] = [{"ticker": ticker}, {"year": year}]
+        elif year:
+            where_filter["year"] = year
+        elif ticker:
+            where_filter["ticker"] = ticker
+
+        res = self.collection.query(
+            query_embeddings=[query_emb],
+            n_results=settings.rerank_candidates,
+            where=where_filter if where_filter else None,
+        )
+
+        docs = res["documents"][0]
+        metadatas = res["metadatas"][0]
+        distances = res["distances"][0]
+        ids = res["ids"][0]
+
+        if not docs:
+            return []
+
+        rerank = self.voyage.rerank(
+            query=query,
+            documents=docs,
+            model=settings.rerank_model,
+            top_k=top_k,
+        )
+
+        return self._build_hits(docs, metadatas, distances, ids, rerank.results)
+
+    def _build_hits(
+        self,
+        docs: list[str],
+        metadatas: list[dict],
+        distances: list[float],
+        ids: list[str],
+        selected,
+    ) -> list[RetrievedHit]:
+        """Construct the list of RetrievedHit objects to return, based on the selected rerank results."""
         hits: list[RetrievedHit] = []
         for r in selected:
             i = r.index
@@ -190,3 +246,11 @@ class Retriever:
                 )
             )
         return hits
+
+    def _embed_query(self, query: str) -> list[float]:
+        """Embed the query using the configured embedding model."""
+        query_emb = self.voyage.embed(
+            [query], model=settings.embedding_model, input_type="query"
+        ).embeddings[0]
+
+        return query_emb

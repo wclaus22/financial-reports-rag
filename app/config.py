@@ -6,6 +6,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
 
+    # Whether to use an agentic approach (iteratively retrieving and generating) or a single retrieve->generate step.
+    # Agentic can be better for complex questions but is more expensive and can introduce more failure modes.
+    agentic: bool = True
+    agent_model: str = "claude-haiku-4-5"
+    agent_max_iterations: int = 6
+
     # API keys
     voyage_api_key: str
     anthropic_api_key: str

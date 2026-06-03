@@ -4,12 +4,15 @@ Retrieval-augmented generation over annual reports of five Swiss-listed companie
 
 PDFs are parsed page-by-page, chunked with overlap, embedded with Voyage AI, and indexed in a local Chroma vector store. Retrieval results are passed to Claude to answer questions with citations back to the source company, year, and page.
 
+Queries run through a pluggable **query engine**: either a single retrieve→generate step (`SimpleEngine`) or a hand-rolled **agentic loop** (`AgentEngine`) that decomposes a question into per-(company, year) searches and fans them out in parallel for comparisons and trends. The active engine is selected by config.
+
 A FastAPI service exposes a `/query` endpoint and a minimal static HTML frontend (single-shot textbox — interactive chat is upcoming). A pluggable safety layer sits between retrieval and generation.
 
 ## Stack
 
 - **Embeddings:** Voyage AI (`voyage-4`)
 - **LLM:** Anthropic Claude (`claude-haiku-4-5`)
+- **Agentic loop:** hand-rolled tool-use loop over the Anthropic SDK (no framework)
 - **Vector store:** Chroma (local, persisted)
 - **Parsing:** `pypdf`
 - **Chunking:** `langchain-text-splitters` (recursive, 1000 chars / 100 overlap)
@@ -23,7 +26,9 @@ A FastAPI service exposes a `/query` endpoint and a minimal static HTML frontend
 
 ```
 app/             FastAPI app, retrieval, generation, safety, config
-  pipeline.py    Shared retrieve→generate orchestration (route + eval call this)
+  engine.py      QueryEngine abstraction + build_engine factory (simple vs agentic)
+  agent.py       Hand-rolled agentic tool-use loop (search tool, per-tuple fanout)
+  pipeline.py    Shared retrieve→generate orchestration (SimpleEngine + eval call this)
 ingest/          PDF parsing, chunking, embedding, indexing
 frontend/        Static single-page UI (index.html)
 evals/           Evaluation harness (question set, runner, metrics, LLM judge)
@@ -61,6 +66,9 @@ cp .env.example .env
 | `LLM_MODEL` | Claude model for answer generation (default `claude-haiku-4-5`) |
 | `JUDGE_MODEL` | Claude model for the eval judge (default `claude-sonnet-4-6`) |
 | `TOP_K` | Number of chunks to retrieve per query |
+| `AGENTIC` | Use the agentic engine (`true`) vs. the single-step engine (`false`); default `true` |
+| `AGENT_MODEL` | Claude model driving the agentic loop (default `claude-haiku-4-5`) |
+| `AGENT_MAX_ITERATIONS` | Max search→generate iterations before the agent must answer (default `6`) |
 
 ## Data
 
@@ -92,7 +100,7 @@ make run
 Serves FastAPI on `http://localhost:8080`:
 
 - `GET /` — static frontend (single-shot question box, renders the answer plus expandable source chunks)
-- `POST /query` — `{ "question": str, "top_k": int }` → `{ "answer": str, "sources": [...] }`
+- `POST /query` — `{ "question": str, "top_k": int }` → `{ "answer": str, "sources": [...] }` (routed through the configured engine)
 - `GET /health` — liveness probe
 
 The frontend is intentionally static for now — no streaming, no multi-turn chat. Conversational chat is on the roadmap.
@@ -105,6 +113,15 @@ make docker-down
 ```
 
 The compose file mounts `./chroma_db` and `./frontend` so the index and UI can be iterated on without rebuilding.
+
+## Query engines
+
+A request runs through a `QueryEngine` ([app/engine.py](app/engine.py)). The `build_engine` factory picks one based on `settings.agentic`, and both the `/query` route and the eval runner see only the `QueryEngine` interface — so they stay identical whichever path is active.
+
+- **`SimpleEngine`** — the baseline. One retrieval pass (with year-range fanout + reranking) handed straight to the generator via the shared `run_query` pipeline.
+- **`AgentEngine`** ([app/agent.py](app/agent.py)) — a hand-rolled tool-use loop over the Anthropic SDK (no agent framework). Claude is given a `search` tool with optional `ticker`/`year` filters and a corpus manifest, and is told to issue **one search per (company, year) tuple**, in parallel, for comparisons and trends. Retrieved excerpts are deduplicated across all tool calls and returned as the grounding set. A grounding discipline in the prompt forbids inferring or interpolating a figure across a tuple that returned no excerpt; the final iteration is forced to answer (`tool_choice: none`) so the loop always terminates within `AGENT_MAX_ITERATIONS`.
+
+The agentic path handles multi-company / multi-year questions more reliably, at the cost of extra API calls and latency. Set `AGENTIC=false` to fall back to the single-step engine.
 
 ## Safety
 
@@ -126,7 +143,13 @@ make eval-retrieval        # retrieval only (skips the judge; still generates an
 # extra flags pass straight through via ARGS:
 make eval ARGS="--limit 3 --category single_doc_factual"
 make eval ARGS="--id A001 --id B002"
+
+# pick the engine explicitly (overrides the AGENTIC setting):
+make eval ARGS="--engine agent"
+make eval ARGS="--engine simple"
 ```
+
+The runner builds its engine the same way the server does. `--engine simple|agent` overrides the `AGENTIC` default for a single run, letting you A/B the two paths against the gold set; the chosen engine (and `agent_model`) is recorded in the results JSON.
 
 A live run needs the Voyage + Anthropic keys and an ingested Chroma index, and spends API calls (one generation + one judge call per answerable question). Results are written to `evals/results/eval_<utc-timestamp>.json` and a per-category summary is printed.
 
@@ -161,7 +184,7 @@ Each entry in `eval_set.json` carries an `expected_behavior` and a `gold_match`:
 make test          # or: uv run pytest -q
 ```
 
-Covers the retriever, the generator (with the safety pipeline), the shared query pipeline, the eval judge, and the ingestion path.
+Covers the retriever (including filtered `search`), the generator (with the safety pipeline), the shared query pipeline, the agentic loop, the engine factory, the eval judge, and the ingestion path.
 
 ## License
 

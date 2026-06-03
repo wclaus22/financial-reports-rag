@@ -6,10 +6,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.config import settings
+from app.engine import QueryEngine, build_engine
 from app.generation import Generator
 from app.logging import configure_logging
 from app.models import QueryRequest, QueryResponse, Source
-from app.pipeline import run_query
 from app.retrieval import Retriever
 from app.safety import GenerationSafety, NoSafetyMechanism
 
@@ -48,11 +49,23 @@ def get_generator() -> Generator:
     return _generator
 
 
+_engine: QueryEngine | None = None
+
+
+def get_engine() -> QueryEngine:
+    # Built once from the cached retriever/generator. `settings.agentic` selects
+    # the agent vs. simple path; either way the route only sees a QueryEngine.
+    global _engine
+    if _engine is None:
+        _engine = build_engine(settings.agentic, get_retriever(), get_generator())
+    return _engine
+
+
 @app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest):
     # TODO: not async thread safe, but fine under Uvicorn's single-threaded event loop model
     try:
-        retriever = get_retriever()
+        get_retriever()
     except Exception as e:
         logger.exception("Retriever construction failed")
         raise HTTPException(
@@ -60,7 +73,7 @@ def query(request: QueryRequest):
             f"Retriever unavailable. Has the ingestion job been run? Error: {e}",
         )
     try:
-        generator = get_generator()
+        get_generator()
     except Exception as e:
         logger.exception("Generator construction failed")
         raise HTTPException(
@@ -68,7 +81,7 @@ def query(request: QueryRequest):
             f"Generator unavailable. Error: {e}",
         )
 
-    result = run_query(request.question, request.top_k, retriever, generator)
+    result = get_engine().run(request.question, request.top_k)
     sources = [Source(**hit.__dict__) for hit in result.grounding]
     return QueryResponse(answer=result.answer, sources=sources)
 

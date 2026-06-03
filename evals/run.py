@@ -32,9 +32,9 @@ from pathlib import Path
 from typing import Callable
 
 from app.config import settings
+from app.engine import QueryEngine, build_engine
 from app.generation import Generator
 from app.models import RetrievedHit
-from app.pipeline import run_query
 from app.retrieval import Retriever
 from app.safety import GenerationSafety, NoSafetyMechanism
 from evals.dataset import EvalQuestion, load_eval_set
@@ -84,13 +84,12 @@ def _compact_hit(h: RetrievedHit) -> dict:
 
 def evaluate_question(
     q: EvalQuestion,
-    retriever: Retriever,
-    generator: Generator,
+    engine: QueryEngine,
     top_k: int,
     judge: JudgeFn | None,
 ) -> QuestionResult:
-    """retrieve -> score -> generate -> (optionally) judge, for one question."""
-    query = run_query(q.question, top_k, retriever, generator)
+    """run through the engine -> score -> (optionally) judge, for one question."""
+    query = engine.run(q.question, top_k)
     # score retrieval on the raw retriever slate, NOT the post-safety grounding.
     retrieval = score_retrieval(q, query.retrieved)
     answer, grounding = query.answer, query.grounding
@@ -214,6 +213,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--id", action="append", dest="ids", help="filter by question id (repeatable)")
     p.add_argument("--limit", type=int, default=None, help="cap number of questions")
     p.add_argument("--no-judge", action="store_true", help="skip the LLM behaviour judge")
+    p.add_argument(
+        "--engine",
+        choices=["simple", "agent"],
+        default=None,
+        help="which engine to run (default: settings.agentic)",
+    )
     p.add_argument("--out", default=None, help="results JSON path (default: timestamped)")
     return p.parse_args()
 
@@ -230,14 +235,19 @@ def main() -> None:
     judge = None if args.no_judge else load_judge()
     judged = judge is not None
 
-    retriever = Retriever()
-    generator = Generator(GenerationSafety(NoSafetyMechanism()))
+    # --engine wins if given, else fall back to the configured default.
+    agentic = args.engine == "agent" if args.engine else settings.agentic
+    engine = build_engine(
+        agentic,
+        Retriever(),
+        Generator(GenerationSafety(NoSafetyMechanism())),
+    )
 
     results: list[QuestionResult] = []
     for i, q in enumerate(questions, start=1):
         logger.info("[%d/%d] %s %s", i, len(questions), q.id, q.question[:70])
         try:
-            results.append(evaluate_question(q, retriever, generator, args.top_k, judge))
+            results.append(evaluate_question(q, engine, args.top_k, judge))
         except Exception as e:  # one bad question shouldn't sink the whole run
             logger.exception("Question %s failed", q.id)
             results.append(
@@ -268,7 +278,9 @@ def main() -> None:
         "eval_set": args.eval_set,
         "top_k": args.top_k,
         "judged": judged,
+        "engine": "agent" if agentic else "simple",
         "llm_model": settings.llm_model,
+        "agent_model": settings.agent_model,
         "embedding_model": settings.embedding_model,
         "rerank_model": settings.rerank_model,
         "n_questions": len(questions),

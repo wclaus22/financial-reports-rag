@@ -160,6 +160,16 @@ def test_generate_answer_invokes_safety_for_each_hit():
     safety.check_hits.assert_called_once()
 
 
+def test_system_prompt_contains_grounding_guardrail():
+    """The simple path must carry the same per-source discipline as the agent
+    so the A/B fabrication comparison isn't confounded by prompt differences."""
+    lowered = SYSTEM_PROMPT.lower()
+    assert "exact company and year" in lowered
+    assert "never infer, interpolate" in lowered
+    assert "say so explicitly" in lowered
+    assert "[ticker year, p. page]" in lowered
+
+
 def test_generate_answer_with_no_hits_still_calls_llm():
     generator, anthropic_client = make_generator()
 

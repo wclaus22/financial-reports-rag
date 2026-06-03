@@ -337,3 +337,93 @@ def test_retrieve_multi_year_dedupes_by_chunk_id():
 
     assert len(hits) == 1
     assert hits[0].chunk_id == "dup-chunk"
+
+
+# ---------------------------------------------------------------------------
+# search: filtered single-query primitive (used by the agent)
+# ---------------------------------------------------------------------------
+
+
+def test_search_no_filters_passes_no_where():
+    retriever, _, collection = make_retriever(_two_chunk_result())
+
+    retriever.search("revenue")
+
+    assert collection.query.call_args.kwargs["where"] is None
+
+
+def test_search_ticker_only_uses_bare_clause():
+    retriever, _, collection = make_retriever(_two_chunk_result())
+
+    retriever.search("revenue", ticker="ROG")
+
+    assert collection.query.call_args.kwargs["where"] == {"ticker": "ROG"}
+
+
+def test_search_year_only_uses_bare_clause():
+    retriever, _, collection = make_retriever(_two_chunk_result())
+
+    retriever.search("revenue", year=2023)
+
+    assert collection.query.call_args.kwargs["where"] == {"year": 2023}
+
+
+def test_search_both_filters_uses_compound_and():
+    """Chroma rejects a multi-key top-level where, so both filters must be
+    combined under a single $and (and a single-clause $and is never emitted)."""
+    retriever, _, collection = make_retriever(_two_chunk_result())
+
+    retriever.search("revenue", ticker="ROG", year=2024)
+
+    assert collection.query.call_args.kwargs["where"] == {
+        "$and": [{"ticker": "ROG"}, {"year": 2024}]
+    }
+
+
+def test_search_empty_results_skips_rerank():
+    retriever, voyage, _ = make_retriever(EMPTY_RESULT)
+
+    assert retriever.search("anything", ticker="ROG") == []
+    voyage.rerank.assert_not_called()
+
+
+def test_search_fetches_rerank_candidate_pool_from_chroma():
+    """Chroma is queried for the full rerank candidate pool, not just top_k,
+    so the reranker narrows a wide pool rather than reordering top_k."""
+    retriever, _, collection = make_retriever(_two_chunk_result())
+
+    retriever.search("q", top_k=3)
+
+    assert (
+        collection.query.call_args.kwargs["n_results"] == settings.rerank_candidates
+    )
+
+
+def test_search_reranks_to_top_k():
+    retriever, voyage, _ = make_retriever(_two_chunk_result())
+
+    retriever.search("q", top_k=1)
+
+    assert voyage.rerank.call_args.kwargs["top_k"] == 1
+
+
+def test_search_falls_back_to_settings_top_k(monkeypatch):
+    from app import retrieval
+
+    monkeypatch.setattr(retrieval.settings, "top_k", 7)
+    retriever, voyage, _ = make_retriever(_two_chunk_result())
+
+    retriever.search("q")
+
+    assert voyage.rerank.call_args.kwargs["top_k"] == 7
+
+
+def test_search_returns_typed_hits():
+    retriever, _, _ = make_retriever(_two_chunk_result())
+
+    hits = retriever.search("revenue", ticker="NESN")
+
+    assert len(hits) == 2
+    assert hits[0].ticker == "NESN"
+    assert hits[0].chunk_id == "chunk-1"
+    assert hits[0].rerank_score is not None
